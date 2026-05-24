@@ -231,7 +231,7 @@ function mean(values: number[]): number {
 function simulateConsensusSplit(
   params: ParamSet,
   splitRemainingPct: number,
-  maxBlocks = 1600,
+  maxBlocks = 5000,
 ): SplitResult {
   const remainingHashrate = Math.max(1, Math.min(100, splitRemainingPct)) / 100;
   const context = params.window + MTP_SPAN;
@@ -299,7 +299,10 @@ function simulateConsensusSplit(
       clamp,
     });
 
-    if (halvingBlock != null && block > halvingBlock + params.window) break;
+    const nearSteadyState =
+      block > params.window * 3 &&
+      Math.abs(blockTime - params.targetSpacing) / params.targetSpacing < 0.01;
+    if (nearSteadyState && elapsed / 3600 >= 12) break;
   }
 
   return { params, points, halvingBlock, halvingHours };
@@ -798,7 +801,11 @@ function App() {
   );
 
   const splitChartData = React.useMemo(() => {
-    const rows = splitResults[0]?.points ?? [];
+    const longest = splitResults.reduce<SplitPoint[]>(
+      (best, result) => (result.points.length > best.length ? result.points : best),
+      [],
+    );
+    const rows = longest.filter((point) => point.hours <= 12);
     return rows.map((point) => {
       const row: Record<string, number | null> = {
         hours: point.hours,
@@ -1057,6 +1064,7 @@ function App() {
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis
                 dataKey="hours"
+                domain={[0, 12]}
                 minTickGap={35}
                 tickFormatter={(v) => fmtDuration(Number(v))}
               />
