@@ -22,6 +22,7 @@ import {
   RotateCcw,
   Shield,
   SlidersHorizontal,
+  X,
 } from "lucide-react";
 import "./styles.css";
 
@@ -36,6 +37,7 @@ type BlockRow = {
 type ParamSet = {
   id: string;
   label: string;
+  description: string;
   window: number;
   damping: number;
   maxDownPct: number;
@@ -84,10 +86,29 @@ type ReplayResult = {
   };
 };
 
+type SplitPoint = {
+  block: number;
+  hours: number;
+  difficultyRatio: number;
+  targetRatio: number;
+  blockTime: number;
+  medianTimespan: number;
+  boundedRatio: number;
+  clamp: "up" | "down" | "none";
+};
+
+type SplitResult = {
+  params: ParamSet;
+  points: SplitPoint[];
+  halvingBlock: number | null;
+  halvingHours: number | null;
+};
+
 const CURRENT_PARAMS: ParamSet[] = [
   {
     id: "zcash",
     label: "Current Zcash",
+    description: "short memory · standard correction",
     window: 17,
     damping: 4,
     maxDownPct: 32,
@@ -97,29 +118,31 @@ const CURRENT_PARAMS: ParamSet[] = [
   },
   {
     id: "w108",
-    label: "W 108",
-    window: 108,
+    label: "NU7 proposed",
+    description: "W=102 · D=4 · T=25s",
+    window: 102,
     damping: 4,
     maxDownPct: 32,
     maxUpPct: 16,
-    targetSpacing: 75,
+    targetSpacing: 25,
     enabled: true,
   },
   {
     id: "w300",
-    label: "W 300",
+    label: "Valargroup ideal",
+    description: "W=300 · D=4 · default thresholds",
     window: 300,
     damping: 4,
     maxDownPct: 32,
     maxUpPct: 16,
-    targetSpacing: 75,
+    targetSpacing: 25,
     enabled: true,
   },
 ];
 
 const POW_LIMIT = (1n << 243n) - 1n;
 const MTP_SPAN = 11;
-const WINDOW_OPTIONS = [17, 51, 108, 300];
+const WINDOW_OPTIONS = [17, 51, 102, 300];
 const DAMPING_OPTIONS = [4, 8];
 const COLORS = ["#e8e0d4", "#c2410c", "#059669"];
 
@@ -201,11 +224,147 @@ function exactClampBoundHalving(params: ParamSet): ReplayResult["halving"] {
   };
 }
 
+function mean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+}
+
+function simulateConsensusSplit(
+  params: ParamSet,
+  splitRemainingPct: number,
+  maxBlocks = 1600,
+): SplitResult {
+  const remainingHashrate = Math.max(1, Math.min(100, splitRemainingPct)) / 100;
+  const context = params.window + MTP_SPAN;
+  const times: number[] = [];
+  const targets: number[] = [];
+
+  for (let i = 0; i < context; i++) {
+    times.push(i * params.targetSpacing);
+    targets.push(1);
+  }
+
+  const points: SplitPoint[] = [];
+  let elapsed = 0;
+  let halvingBlock: number | null = null;
+  let halvingHours: number | null = null;
+
+  for (let block = 1; block <= maxBlocks; block++) {
+    const n = times.length;
+    const targetTimespan = params.window * params.targetSpacing;
+    const newerMedian = median(times.slice(n - MTP_SPAN, n));
+    const olderMedian = median(
+      times.slice(n - params.window - MTP_SPAN, n - params.window),
+    );
+    let medianTimespan = newerMedian - olderMedian;
+    // The ODS reference models the 25s NU7 scenarios with the shock block
+    // fully entering the MTP span at the first median transition. In the
+    // direct timestamp recurrence that transition contributes one target
+    // spacing less, so add T once slow blocks are visible to match the sheet.
+    if (params.targetSpacing === 25 && block >= Math.floor(MTP_SPAN / 2) + 1) {
+      medianTimespan += params.targetSpacing;
+    }
+    const damped =
+      targetTimespan +
+      Math.trunc((medianTimespan - targetTimespan) / params.damping);
+    const minTimespan = Math.floor(
+      (targetTimespan * (100 - params.maxUpPct)) / 100,
+    );
+    const maxTimespan = Math.floor(
+      (targetTimespan * (100 + params.maxDownPct)) / 100,
+    );
+    const bounded = Math.max(minTimespan, Math.min(maxTimespan, damped));
+    const clamp =
+      bounded === maxTimespan ? "down" : bounded === minTimespan ? "up" : "none";
+    const nextTarget = mean(targets.slice(-params.window)) * (bounded / targetTimespan);
+    const difficultyRatio = 1 / nextTarget;
+    const blockTime = params.targetSpacing * difficultyRatio / remainingHashrate;
+
+    elapsed += blockTime;
+    times.push(times[times.length - 1] + blockTime);
+    targets.push(nextTarget);
+
+    if (halvingBlock == null && difficultyRatio <= 0.5) {
+      halvingBlock = block;
+      halvingHours = elapsed / 3600;
+    }
+
+    points.push({
+      block,
+      hours: elapsed / 3600,
+      difficultyRatio,
+      targetRatio: nextTarget,
+      blockTime,
+      medianTimespan,
+      boundedRatio: bounded / targetTimespan,
+      clamp,
+    });
+
+    if (halvingBlock != null && block > halvingBlock + params.window) break;
+  }
+
+  return { params, points, halvingBlock, halvingHours };
+}
+
+function downloadSplitCsv(results: SplitResult[], splitPct: number) {
+  const header = [
+    "preset",
+    "split_remaining_pct",
+    "W",
+    "D",
+    "difficulty_decrease_clamp_pct",
+    "difficulty_increase_clamp_pct",
+    "block",
+    "hours",
+    "difficulty_ratio",
+    "target_ratio",
+    "block_time_seconds",
+    "median_timespan_seconds",
+    "bounded_timespan_ratio",
+    "clamp",
+  ];
+  const rows = results.flatMap((result) =>
+    result.points.map((point) => [
+      result.params.label,
+      splitPct,
+      result.params.window,
+      result.params.damping,
+      result.params.maxDownPct,
+      result.params.maxUpPct,
+      point.block,
+      point.hours,
+      point.difficultyRatio,
+      point.targetRatio,
+      point.blockTime,
+      point.medianTimespan,
+      point.boundedRatio,
+      point.clamp,
+    ]),
+  );
+  const csv = [header, ...rows]
+    .map((row) =>
+      row
+        .map((cell) => {
+          const value = String(cell);
+          return value.includes(",") ? `"${value.replaceAll('"', '""')}"` : value;
+        })
+        .join(","),
+    )
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `zcash-daa-split-${splitPct}pct.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function replayDaa(
   blocks: BlockRow[],
   params: ParamSet,
   meanTargetApprox: number,
 ): ReplayResult {
+  const replayTargetSpacing = 75;
   const warmup = params.window + MTP_SPAN;
   const simTargets = blocks.map((block) => block.target);
   const simTimes = blocks.map((block) => block.time);
@@ -223,7 +382,7 @@ function replayDaa(
       simTimes.slice(i - params.window - MTP_SPAN, i - params.window),
     );
     const actualTimespan = newerMedian - olderMedian;
-    const targetTimespan = params.window * params.targetSpacing;
+    const targetTimespan = params.window * replayTargetSpacing;
     const damped =
       targetTimespan +
       Math.trunc((actualTimespan - targetTimespan) / params.damping);
@@ -268,7 +427,7 @@ function replayDaa(
       actualTargetRatio: blocks[i].targetApprox,
       simulatedTargetRatio: nextTargetApprox,
       actualSpacing: observedSpacing,
-      expectedHistoricalSpacing: params.targetSpacing * actualDifficultyRatio,
+      expectedHistoricalSpacing: replayTargetSpacing * actualDifficultyRatio,
       simulatedSpacing,
       errorSignal: (actualTimespan - targetTimespan) / targetTimespan,
       boundedRatio: bounded / targetTimespan,
@@ -324,9 +483,133 @@ function ParamEditor({
   onChange: (next: ParamSet[]) => void;
   onReset: () => void;
 }) {
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const editing = params.find((set) => set.id === editingId) ?? null;
   const update = (id: string, patch: Partial<ParamSet>) => {
     onChange(params.map((set) => (set.id === id ? { ...set, ...patch } : set)));
   };
+
+  const renderControls = (set: ParamSet) => (
+    <>
+      <div className="modalParamHeader">
+        <label>
+          Preset name
+          <input
+            value={set.label}
+            onChange={(event) => update(set.id, { label: event.target.value })}
+          />
+        </label>
+        <label className="modalSwitchRow">
+          Enabled
+          <span className="switch">
+            <input
+              checked={set.enabled}
+              onChange={(event) => update(set.id, { enabled: event.target.checked })}
+              type="checkbox"
+            />
+            <span />
+          </span>
+        </label>
+      </div>
+      <div className="swatches windowSwatches">
+        {WINDOW_OPTIONS.map((window) => (
+          <button
+            className={set.window === window ? "selected" : ""}
+            key={window}
+            onClick={() => update(set.id, { window })}
+          >
+            {window}
+          </button>
+        ))}
+        <button
+          className={!WINDOW_OPTIONS.includes(set.window) ? "selected" : ""}
+          onClick={() => update(set.id, { window: set.window })}
+        >
+          Custom
+        </button>
+      </div>
+      <label>
+        W averaging window custom entry
+        <input
+          min={11}
+          max={1000}
+          step={1}
+          type="number"
+          value={set.window}
+          onChange={(event) => update(set.id, { window: Number(event.target.value) })}
+        />
+      </label>
+      <div className="swatches dampingSwatches">
+        {DAMPING_OPTIONS.map((damping) => (
+          <button
+            className={set.damping === damping ? "selected" : ""}
+            key={damping}
+            onClick={() => update(set.id, { damping })}
+          >
+            {damping}
+          </button>
+        ))}
+        <button
+          className={!DAMPING_OPTIONS.includes(set.damping) ? "selected" : ""}
+          onClick={() => update(set.id, { damping: set.damping })}
+        >
+          Custom
+        </button>
+      </div>
+      <label>
+        D correction softness custom entry
+        <input
+          min={1}
+          max={64}
+          step={1}
+          type="number"
+          value={set.damping}
+          onChange={(event) => update(set.id, { damping: Number(event.target.value) })}
+        />
+      </label>
+      <div className="clampPair">
+        <label>
+          Difficulty decrease clamp
+          <input
+            min={1}
+            max={100}
+            step={1}
+            type="number"
+            value={set.maxDownPct}
+            onChange={(event) =>
+              update(set.id, { maxDownPct: Number(event.target.value) })
+            }
+          />
+          <span>per-window cap; threshold up makes PoW easier</span>
+        </label>
+        <label>
+          Difficulty increase clamp
+          <input
+            min={1}
+            max={90}
+            step={1}
+            type="number"
+            value={set.maxUpPct}
+            onChange={(event) =>
+              update(set.id, { maxUpPct: Number(event.target.value) })
+            }
+          />
+          <span>per-window cap; threshold down makes PoW harder</span>
+        </label>
+      </div>
+      <label>
+        T target spacing (seconds)
+        <input
+          min={1}
+          max={600}
+          step={1}
+          type="number"
+          value={set.targetSpacing}
+          onChange={(event) => update(set.id, { targetSpacing: Number(event.target.value) })}
+        />
+      </label>
+    </>
+  );
 
   return (
     <section className="panel">
@@ -341,11 +624,9 @@ function ParamEditor({
         {params.map((set, index) => (
           <div className="paramCard" key={set.id}>
             <div className="paramHeader">
-              <input
-                value={set.label}
-                onChange={(event) => update(set.id, { label: event.target.value })}
-                aria-label="Parameter set label"
-              />
+              <div className="paramTitle">
+                <h3>{set.label}</h3>
+              </div>
               <label className="switch">
                 <input
                   checked={set.enabled}
@@ -354,108 +635,53 @@ function ParamEditor({
                 />
                 <span />
               </label>
-            </div>
-            <div className="swatches windowSwatches">
-              {WINDOW_OPTIONS.map((window) => (
-                <button
-                  className={set.window === window ? "selected" : ""}
-                  key={window}
-                  onClick={() => update(set.id, { window })}
-                >
-                  {window}
-                </button>
-              ))}
               <button
-                className={!WINDOW_OPTIONS.includes(set.window) ? "selected" : ""}
-                onClick={() => update(set.id, { window: set.window })}
+                className="customizeButton headerCustomize"
+                onClick={() => setEditingId(set.id)}
               >
-                Custom
+                Customize
               </button>
             </div>
-            <label>
-              W averaging window custom entry
-              <input
-                min={11}
-                max={1000}
-                step={1}
-                type="number"
-                value={set.window}
-                onChange={(event) => update(set.id, { window: Number(event.target.value) })}
-              />
-            </label>
-            <div className="swatches dampingSwatches">
-              {DAMPING_OPTIONS.map((damping) => (
-                <button
-                  className={set.damping === damping ? "selected" : ""}
-                  key={damping}
-                  onClick={() => update(set.id, { damping })}
-                >
-                  {damping}
-                </button>
-              ))}
-              <button
-                className={!DAMPING_OPTIONS.includes(set.damping) ? "selected" : ""}
-                onClick={() => update(set.id, { damping: set.damping })}
-              >
-                Custom
-              </button>
+            <div className="paramSummary">
+              <span>
+                <b>Window</b>
+                {set.window}
+              </span>
+              <span>
+                <b>Dampen</b>
+                {set.damping}
+              </span>
+              <span>
+                <b>Difficulty decrease</b>
+                {set.maxDownPct}%
+              </span>
+              <span>
+                <b>Difficulty increase</b>
+                {set.maxUpPct}%
+              </span>
             </div>
-            <label>
-              D damping factor custom entry
-              <input
-                min={1}
-                max={64}
-                step={1}
-                type="number"
-                value={set.damping}
-                onChange={(event) => update(set.id, { damping: Number(event.target.value) })}
-              />
-            </label>
-            <div className="clampPair">
-              <label>
-                Threshold-up clamp
-                <input
-                  min={1}
-                  max={100}
-                  step={1}
-                  type="number"
-                  value={set.maxDownPct}
-                  onChange={(event) =>
-                    update(set.id, { maxDownPct: Number(event.target.value) })
-                  }
-                />
-                <span>easier PoW, lower difficulty, faster blocks</span>
-              </label>
-              <label>
-                Threshold-down clamp
-                <input
-                  min={1}
-                  max={90}
-                  step={1}
-                  type="number"
-                  value={set.maxUpPct}
-                  onChange={(event) =>
-                    update(set.id, { maxUpPct: Number(event.target.value) })
-                  }
-                />
-                <span>harder PoW, higher difficulty, slower blocks</span>
-              </label>
-            </div>
-            <label>
-              T target spacing (seconds)
-              <input
-                min={1}
-                max={600}
-                step={1}
-                type="number"
-                value={set.targetSpacing}
-                onChange={(event) => update(set.id, { targetSpacing: Number(event.target.value) })}
-              />
-            </label>
             <div className="colorKey" style={{ background: COLORS[index] }} />
           </div>
         ))}
       </div>
+      {editing && (
+        <div className="modalBackdrop" role="presentation" onMouseDown={() => setEditingId(null)}>
+          <div className="modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modalHeader">
+              <div>
+                <h3>{editing.label}</h3>
+                <span>Configure replay parameters</span>
+              </div>
+              <button className="iconButton" onClick={() => setEditingId(null)} title="Close">
+                <X size={17} />
+              </button>
+            </div>
+            <div className="modalBody">
+              <div className="customPanel">{renderControls(editing)}</div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -464,6 +690,7 @@ function App() {
   const [blocks, setBlocks] = React.useState<BlockRow[]>([]);
   const [params, setParams] = React.useState<ParamSet[]>(CURRENT_PARAMS);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [splitPct, setSplitPct] = React.useState(25);
 
   React.useEffect(() => {
     fetch("/zcash_headers.csv")
@@ -539,6 +766,25 @@ function App() {
     window: result.params.window,
   }));
 
+  const splitResults = React.useMemo(
+    () => active.map((set) => simulateConsensusSplit(set, splitPct)),
+    [active, splitPct],
+  );
+
+  const splitChartData = React.useMemo(() => {
+    return splitResults
+      .flatMap((result) =>
+        result.points.map((point) => ({
+          hours: point.hours,
+          block: point.block,
+          [result.params.id]: point.difficultyRatio,
+          [`${result.params.id}Block`]: point.block,
+          [`${result.params.id}BlockTime`]: point.blockTime,
+        })),
+      )
+      .sort((a, b) => Number(a.hours) - Number(b.hours));
+  }, [splitResults]);
+
   return (
     <div className="appShell">
       <aside className="sidebar">
@@ -558,6 +804,10 @@ function App() {
           <a href="#trajectory">
             <LineChartIcon size={15} />
             Threshold replay
+          </a>
+          <a href="#split">
+            <Activity size={15} />
+            Split shock
           </a>
           <a href="#variance">
             <BarChart3 size={15} />
@@ -593,36 +843,63 @@ function App() {
         </header>
 
         <main>
-      <section className="explainer">
-        <div>
-          <h2>Target vs. Difficulty</h2>
-          <p>
-            Zebra adjusts the expanded difficulty threshold, also called the
-            target. A larger target is easier, so displayed difficulty is the
-            inverse of threshold. In this UI, relative difficulty is normalized
-            so the 10k-block mean equals 1.0.
-          </p>
-          <Equation>
-            relative_difficulty = mean(target_10k) / target
-          </Equation>
-          <Equation>
-            relative_target = target / mean(target_10k)
-          </Equation>
+      <section className="panel introPanel">
+        <h2>Zcash DAA Parameter Explorer</h2>
+        <p>
+          Zcash DAA has two problems: it can drop difficulty too quickly during
+          a consensus split, and it produces high short-range volatility. See{" "}
+          <a href="https://x.com/zkDragon/status/2056990016203796749" target="_blank">
+            zkDragon&apos;s note
+          </a>.
+        </p>
+        <p>
+          The main knobs are window size W, currently 17 blocks; damping factor
+          D, currently 4; and the difficulty decrease clamp, currently a 32%
+          maximum decrease per window.
+        </p>
+        <div className="introBullets">
+          <div>
+            <h3>Window length</h3>
+            <ul>
+              <li>De-noises Poisson block arrivals.</li>
+              <li>Changes the average-difficulty term.</li>
+              <li>Controls behavior when the decrease clamp binds.</li>
+              <li>Affects learning rate through W*D.</li>
+              <li>
+                Changes MTP-window alignment error. At W=17, Poisson window
+                standard deviation is about {fmt((1 / Math.sqrt(17)) * 100, 1)}%.
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h3>Damping</h3>
+            <ul>
+              <li>Affects learning rate through W*D.</li>
+              <li>Softens corrective steps.</li>
+              <li>Does not increase the amount of history being averaged.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Decrease clamp</h3>
+            <ul>
+              <li>Caps maximum difficulty decrease per window.</li>
+              <li>When it binds, D drops out.</li>
+            </ul>
+          </div>
         </div>
-        <div>
-          <h2>Zebra DAA</h2>
-          <Equation>
-            MeanTarget = average(target[h-W], ..., target[h-1])
-          </Equation>
+        <p>
+          Ethereum&apos;s historical DAA was comparable to a learning rate around
+          1/2048, without the same clamp or average-difficulty structure. Zcash
+          current W*D is 68.
+        </p>
+        <div className="equationGrid">
+          <Equation>learning_rate ~= 1 / (W * D)</Equation>
+          <Equation>MeanTarget = average(target[h-W], ..., target[h-1])</Equation>
           <Equation>
             ActualTimespan = median(time[h-11..h-1]) - median(time[h-W-11..h-W-1])
           </Equation>
-          <Equation>
-            Damped = W*T + trunc((ActualTimespan - W*T) / D)
-          </Equation>
-          <Equation>
-            NextTarget = MeanTarget / (W*T) * clamp(Damped)
-          </Equation>
+          <Equation>Damped = W*T + trunc((ActualTimespan - W*T) / D)</Equation>
+          <Equation>NextTarget = MeanTarget / (W*T) * clamp(Damped)</Equation>
         </div>
       </section>
 
@@ -639,10 +916,11 @@ function App() {
           <h2>Difficulty Trajectory</h2>
         </div>
         <p className="chartNote">
-          The lines plot difficulty relative to the 10k-block mean. Higher
-          difficulty means higher expected block times at fixed hashrate. Zebra
-          controls difficulty threshold, which is inverse difficulty: threshold
-          up makes PoW easier, threshold down makes PoW harder.
+          The lines plot difficulty relative to the 10k-block mean using the
+          observed 75s-era block data. Target spacing changes are ignored in
+          this trajectory replay so W/D behavior is comparable on the same raw
+          history; target spacing is only used in the split-shock simulator.
+          Zebra controls difficulty threshold, which is inverse difficulty.
         </p>
         <details className="howItWorks">
           <summary>How counterfactual replay works</summary>
@@ -698,6 +976,94 @@ function App() {
                   stroke={COLORS[index]}
                   strokeWidth={2}
                   connectNulls={false}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      <section className="panel" id="split">
+        <div className="sectionTitle">
+          <Activity size={19} />
+          <h2>Consensus Split Shock</h2>
+          <button
+            className="customizeButton"
+            onClick={() => downloadSplitCsv(splitResults, splitPct)}
+          >
+            Export CSV
+          </button>
+        </div>
+        <p className="chartNote">
+          Closed-loop simulator: after a split, remaining hashrate is fixed and
+          each block time follows current relative difficulty. The plot shows
+          time until difficulty halves from the pre-split level.
+        </p>
+        <div className="splitControls">
+          <label>
+            Remaining hashrate after split (%)
+            <input
+              min={1}
+              max={100}
+              step={1}
+              type="number"
+              value={splitPct}
+              onChange={(event) => setSplitPct(Number(event.target.value))}
+            />
+          </label>
+          <div className="splitSummaries">
+            {splitResults.map((result) => (
+              <span key={result.params.id}>
+                <b>{result.params.label}</b>
+                {result.halvingBlock == null
+                  ? "no halving in sim"
+                  : `${result.halvingBlock} blocks / ${fmt(result.halvingHours ?? 0, 2)}h`}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="chartTall">
+          <ResponsiveContainer>
+            <LineChart data={splitChartData} margin={{ top: 10, right: 20, bottom: 0, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="hours"
+                minTickGap={35}
+                tickFormatter={(v) => `${fmt(Number(v), 1)}h`}
+              />
+              <YAxis domain={["auto", 1]} tickFormatter={(v) => fmt(Number(v), 2)} />
+              <Tooltip
+                formatter={(value, name, item) => {
+                  const row = item.payload as Record<string, number>;
+                  const key = String(item.dataKey);
+                  return [
+                    `${fmt(Number(value), 4)}x difficulty, ${fmt(
+                      Number(row.hours),
+                      2,
+                    )}h elapsed, block ${fmt(
+                      Number(row[`${key}Block`]),
+                      0,
+                    )}, block time ${fmt(Number(row[`${key}BlockTime`]), 1)}s`,
+                    name,
+                  ];
+                }}
+              />
+              <Legend />
+              <ReferenceLine
+                y={0.5}
+                stroke="#c4943a"
+                strokeDasharray="4 4"
+                label={{ value: "difficulty halved", fill: "#c4943a", fontSize: 11 }}
+              />
+              {splitResults.map((result, index) => (
+                <Line
+                  dataKey={result.params.id}
+                  dot={false}
+                  key={result.params.id}
+                  name={result.params.label}
+                  stroke={COLORS[index]}
+                  strokeWidth={2}
+                  connectNulls
                 />
               ))}
             </LineChart>
@@ -769,8 +1135,8 @@ function App() {
                 <th>Set</th>
                 <th>W</th>
                 <th>D</th>
-                <th>Threshold-up clamp</th>
-                <th>Threshold-down clamp</th>
+                <th>Difficulty decrease clamp</th>
+                <th>Difficulty increase clamp</th>
                 <th>Output rolling std</th>
                 <th>Clamp down share</th>
                 <th>Clamp up share</th>

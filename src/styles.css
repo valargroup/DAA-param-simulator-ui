@@ -220,6 +220,7 @@ p {
 }
 
 .explainer > div,
+.compactTheory,
 .recommendation,
 .panel,
 .paramCard,
@@ -231,6 +232,61 @@ p {
 
 .explainer > div {
   padding: 14px;
+}
+
+.introPanel p {
+  max-width: 1180px;
+}
+
+.introPanel a,
+.explainer a {
+  color: var(--accent-glow);
+}
+
+.introPanel .equationGrid {
+  margin-bottom: 0;
+}
+
+.introBullets {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  margin: 12px 0;
+}
+
+.introBullets > div {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 11px 12px;
+}
+
+.introBullets h3 {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  margin: 0 0 7px;
+}
+
+.introBullets ul {
+  color: var(--text-secondary);
+  margin: 0;
+  padding-left: 18px;
+}
+
+.introBullets li {
+  margin: 4px 0;
+}
+
+.compactTheory {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+  padding: 14px;
+}
+
+.compactTheory p {
+  font-size: 0.82rem;
+  margin-bottom: 0;
 }
 
 .equation {
@@ -266,6 +322,10 @@ p {
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+.sectionTitle .customizeButton {
+  margin-left: auto;
 }
 
 .sectionTitle svg {
@@ -313,16 +373,96 @@ p {
   gap: 10px;
 }
 
-.paramHeader input {
-  color: var(--text-primary);
-  font-weight: 700;
+.paramTitle {
+  min-width: 0;
+  width: 100%;
 }
 
-.paramCard label {
+.paramTitle h3 {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.paramTitle span {
+  color: var(--text-muted);
+  display: block;
+  font-size: 0.72rem;
+  margin-top: 5px;
+}
+
+.paramCard label,
+.customPanel label {
   color: var(--text-secondary);
   display: block;
   font-size: 0.78rem;
   margin-top: 10px;
+}
+
+.modalParamHeader {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 96px;
+}
+
+.modalSwitchRow {
+  align-items: center;
+  display: flex !important;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.modalSwitchRow .switch {
+  margin-top: 0;
+}
+
+.paramSummary {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 14px;
+}
+
+.paramSummary span {
+  background: var(--surface-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  padding: 7px 6px 8px;
+  text-align: center;
+}
+
+.paramSummary b {
+  color: var(--text-muted);
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+  text-transform: uppercase;
+}
+
+.customizeButton {
+  background: rgb(196 148 58 / 0.9);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--surface-0);
+  cursor: pointer;
+  font-weight: 700;
+  padding: 7px 10px;
+}
+
+.headerCustomize {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+}
+
+.customizeButton:hover {
+  background: var(--accent-glow);
 }
 
 .clampPair {
@@ -338,7 +478,8 @@ p {
   margin-top: 3px;
 }
 
-.paramCard input {
+.paramCard input,
+.customPanel input {
   background: var(--surface-0);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -348,7 +489,8 @@ p {
   width: 100%;
 }
 
-.paramCard input:focus {
+.paramCard input:focus,
+.customPanel input:focus {
   border-color: var(--accent);
   outline: none;
 }
@@ -426,6 +568,100 @@ p {
   border-radius: 999px;
   height: 4px;
   margin-top: 12px;
+}
+
+.modalBackdrop {
+  align-items: center;
+  background: rgb(0 0 0 / 0.66);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 22px;
+  position: fixed;
+  z-index: 20;
+}
+
+.modal {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 18px 60px rgb(0 0 0 / 0.42);
+  max-height: min(760px, calc(100vh - 44px));
+  max-width: 760px;
+  overflow-y: auto;
+  width: min(760px, 100%);
+}
+
+.modalHeader {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.modalHeader h3 {
+  font-size: 0.96rem;
+  margin: 0 0 2px;
+}
+
+.modalHeader span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.modalBody {
+  padding: 14px;
+}
+
+.customPanel {
+  background: var(--surface-1);
+  border-radius: 8px;
+}
+
+.splitControls {
+  align-items: end;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 260px minmax(0, 1fr);
+  margin-bottom: 12px;
+}
+
+.splitControls label {
+  color: var(--text-secondary);
+  display: block;
+  font-size: 0.78rem;
+}
+
+.splitControls input {
+  background: var(--surface-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  margin-top: 4px;
+  padding: 7px 8px;
+  width: 100%;
+}
+
+.splitSummaries {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.splitSummaries span {
+  background: var(--surface-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  padding: 8px;
+}
+
+.splitSummaries b {
+  color: var(--text-primary);
+  display: block;
+  margin-bottom: 3px;
 }
 
 .cards {
@@ -621,10 +857,14 @@ td {
   }
 
   .explainer,
+  .compactTheory,
   .equationGrid,
   .paramGrid,
   .cards,
-  .twoCol {
+  .twoCol,
+  .splitControls,
+  .splitSummaries,
+  .introBullets {
     grid-template-columns: 1fr;
   }
 }
