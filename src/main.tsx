@@ -681,6 +681,10 @@ function ParamEditor({
                 {set.damping}
               </span>
               <span>
+                <b>Block time</b>
+                {set.targetSpacing}s
+              </span>
+              <span>
                 <b>Difficulty decrease</b>
                 {set.maxDownPct}%
               </span>
@@ -1031,9 +1035,9 @@ function App() {
           </button>
         </div>
         <p className="chartNote">
-          Closed-loop simulator: after a split, remaining hashrate is fixed and
-          each block time follows current relative difficulty. The plot shows
-          time until difficulty halves from the pre-split level.
+          After a split, remaining hashrate is fixed and each block time follows
+          current relative difficulty. The plot shows time until difficulty
+          halves from the pre-split level.
         </p>
         <div className="splitControls">
           <label>
