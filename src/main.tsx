@@ -470,6 +470,32 @@ function fmt(value: number, digits = 2): string {
   return Number.isFinite(value) ? value.toFixed(digits) : "n/a";
 }
 
+function fmtDuration(hours: number): string {
+  if (!Number.isFinite(hours)) return "n/a";
+  const totalMinutes = Math.round(hours * 60);
+  const days = Math.floor(totalMinutes / 1440);
+  const remAfterDays = totalMinutes % 1440;
+  const hrs = Math.floor(remAfterDays / 60);
+  const mins = remAfterDays % 60;
+  if (days > 0) return `${days}d ${hrs}h ${mins}m`;
+  if (hrs > 0) return `${hrs}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function nearestSplitPoint(points: SplitPoint[], hours: number): SplitPoint | null {
+  if (!points.length || !Number.isFinite(hours)) return null;
+  let best = points[0];
+  let bestDistance = Math.abs(best.hours - hours);
+  for (const point of points) {
+    const distance = Math.abs(point.hours - hours);
+    if (distance < bestDistance) {
+      best = point;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 function Equation({ children }: { children: React.ReactNode }) {
   return <div className="equation">{children}</div>;
 }
@@ -772,17 +798,20 @@ function App() {
   );
 
   const splitChartData = React.useMemo(() => {
-    return splitResults
-      .flatMap((result) =>
-        result.points.map((point) => ({
-          hours: point.hours,
-          block: point.block,
-          [result.params.id]: point.difficultyRatio,
-          [`${result.params.id}Block`]: point.block,
-          [`${result.params.id}BlockTime`]: point.blockTime,
-        })),
-      )
-      .sort((a, b) => Number(a.hours) - Number(b.hours));
+    const rows = splitResults[0]?.points ?? [];
+    return rows.map((point) => {
+      const row: Record<string, number | null> = {
+        hours: point.hours,
+        block: point.block,
+      };
+      splitResults.forEach((result) => {
+        const nearest = nearestSplitPoint(result.points, point.hours);
+        row[result.params.id] = nearest?.difficultyRatio ?? null;
+        row[`${result.params.id}Block`] = nearest?.block ?? null;
+        row[`${result.params.id}BlockTime`] = nearest?.blockTime ?? null;
+      });
+      return row;
+    });
   }, [splitResults]);
 
   return (
@@ -1029,7 +1058,7 @@ function App() {
               <XAxis
                 dataKey="hours"
                 minTickGap={35}
-                tickFormatter={(v) => `${fmt(Number(v), 1)}h`}
+                tickFormatter={(v) => fmtDuration(Number(v))}
               />
               <YAxis domain={["auto", 1]} tickFormatter={(v) => fmt(Number(v), 2)} />
               <Tooltip
@@ -1037,10 +1066,9 @@ function App() {
                   const row = item.payload as Record<string, number>;
                   const key = String(item.dataKey);
                   return [
-                    `${fmt(Number(value), 4)}x difficulty, ${fmt(
+                    `${fmt(Number(value), 4)}x difficulty, ${fmtDuration(
                       Number(row.hours),
-                      2,
-                    )}h elapsed, block ${fmt(
+                    )} elapsed, block ${fmt(
                       Number(row[`${key}Block`]),
                       0,
                     )}, block time ${fmt(Number(row[`${key}BlockTime`]), 1)}s`,
