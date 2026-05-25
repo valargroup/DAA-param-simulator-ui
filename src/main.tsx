@@ -898,14 +898,14 @@ function App() {
           <div>
             <h3>Window length</h3>
             <ul>
-              <li>De-noises Poisson block arrivals.</li>
+              <li>
+                De-noises Poisson block arrivals. At W=17, Poisson window
+                standard deviation is about {fmt((1 / Math.sqrt(17)) * 100, 1)}%.
+              </li>
               <li>Changes the average-difficulty term.</li>
               <li>Controls behavior when the decrease clamp binds.</li>
               <li>Affects learning rate through W*D.</li>
-              <li>
-                Changes MTP-window alignment error. At W=17, Poisson window
-                standard deviation is about {fmt((1 / Math.sqrt(17)) * 100, 1)}%.
-              </li>
+              <li>Changes MTP-window alignment error.</li>
             </ul>
           </div>
           <div>
