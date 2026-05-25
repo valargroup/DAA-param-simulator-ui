@@ -729,6 +729,13 @@ p {
   margin-bottom: 12px;
 }
 
+.inlineEquation {
+  color: var(--accent-glow);
+  font-family: inherit;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
 .howItWorks {
   background: var(--surface-0);
   border: 1px solid var(--border-subtle);

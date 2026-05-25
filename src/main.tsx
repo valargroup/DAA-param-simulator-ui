@@ -787,10 +787,7 @@ function App() {
 
   const varianceData = results.map((result) => ({
     name: result.params.label,
-    empiricalCov: result.variance.timespanCov * 100,
-    theoreticalCov: result.variance.theoreticalCov * 100,
-    outputStd: result.variance.difficultyRollingStd,
-    errorStd: result.variance.errorStd * 100,
+    coefficientOfVariation: result.variance.timespanCov * 100,
   }));
 
   const offsetData = results.map((result) => ({
@@ -1114,21 +1111,14 @@ function App() {
       <section className="twoCol" id="variance">
         <div className="panel">
           <div className="sectionTitle">
-            <h2>Variance Comparison</h2>
+            <h2>Coefficient of Variation</h2>
           </div>
+          <p className="chartNote">
+            Coefficient of Variation normalizes timespan volatility by the mean:
+            <span className="inlineEquation">CoV = std(ActualTimespan) / mean(ActualTimespan)</span>.
+          </p>
           <div className="equationGrid">
-            <Equation>
-              error_signal = (ActualTimespan - W*T) / (W*T)
-            </Equation>
-            <Equation>
-              empirical_CoV = std(ActualTimespan) / mean(ActualTimespan)
-            </Equation>
-            <Equation>
-              theoretical_CoV = 1 / sqrt(W)
-            </Equation>
-            <Equation>
-              output_std = rolling_std(relative_difficulty, W)
-            </Equation>
+            <Equation>Poisson window reference: CoV ~= 1 / sqrt(W)</Equation>
           </div>
           <div className="chart">
             <ResponsiveContainer>
@@ -1138,9 +1128,11 @@ function App() {
                 <YAxis />
                 <Tooltip formatter={(value) => `${fmt(Number(value), 2)}%`} />
                 <Legend />
-                <Bar dataKey="empiricalCov" fill="#2563eb" name="Empirical timespan CoV" />
-                <Bar dataKey="theoreticalCov" fill="#94a3b8" name="1 / sqrt(W)" />
-                <Bar dataKey="errorStd" fill="#c2410c" name="Error signal std" />
+                <Bar
+                  dataKey="coefficientOfVariation"
+                  fill="#c4943a"
+                  name="Coefficient of Variation"
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
